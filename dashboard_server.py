@@ -61,6 +61,12 @@ state = {
 }
 state_lock = threading.Lock()
 
+# ═══════════════════════ HTTP Stratum Clients ═══════════════════════
+# Clientes que minan vía HTTP (polling) — alternativa a TCP stratum
+stratum_clients = {}  # user → {extranonce, last_seen, shares, hashrate}
+stratum_client_lock = threading.Lock()
+NEXT_STRATUM_EXTRANONCE = 100000  # Rango separado del miner local
+
 
 # ═══════════════════════════════════════════════════════════
 # Crypto
@@ -650,6 +656,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write(DASHBOARD_HTML.encode())
+        elif self.path.startswith("/api/mining/subscribe"):
+            self.handle_stratum_subscribe()
         elif self.path == "/api/stats":
             self.send_json(api_stats())
         else:
@@ -678,8 +686,127 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 state["btc_address"] = addr
             self.send_json({"btc_address": addr, "status": "ok"})
         
+        elif self.path == "/api/mining/submit":
+            self.handle_stratum_submit(data)
+        
         else:
             self.send_error(404)
+    
+    def handle_stratum_subscribe(self):
+        """GET /api/mining/subscribe?user=NAME — registra minero HTTP."""
+        global NEXT_STRATUM_EXTRANONCE
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        user = qs.get("user", ["anonymous"])[0]
+        
+        with stratum_client_lock:
+            if user in stratum_clients:
+                extranonce = stratum_clients[user]["extranonce"]
+            else:
+                extranonce = NEXT_STRATUM_EXTRANONCE
+                NEXT_STRATUM_EXTRANONCE += 1
+                stratum_clients[user] = {
+                    "extranonce": extranonce,
+                    "last_seen": time.time(),
+                    "shares": 0,
+                    "hashrate": 0,
+                }
+            stratum_clients[user]["last_seen"] = time.time()
+        
+        # Obtener trabajo actual
+        with state_lock:
+            tpl = state.get("last_template")
+        
+        work = {
+            "subscription": f"{user}:{extranonce:08x}",
+            "extranonce": f"{extranonce:08x}",
+            "extranonce2_size": 4,
+            "user": user,
+        }
+        if tpl:
+            work.update({
+                "job_id": f"{tpl.get('height', 0)}:{tpl.get('curtime', 0)}",
+                "prevhash": tpl.get("previousblockhash", ""),
+                "version": f"{tpl.get('version', 0):08x}",
+                "bits": tpl.get("bits", ""),
+                "ntime": f"{tpl.get('curtime', 0):08x}",
+                "height": tpl.get("height", 0),
+                "target": tpl.get("target", ""),
+            })
+        
+        self.send_json(work)
+    
+    def handle_stratum_submit(self, data):
+        """POST /api/mining/submit — recibe share de minero HTTP."""
+        user = data.get("user", "unknown")
+        extranonce = data.get("extranonce", "0")
+        extranonce2 = data.get("extranonce2", "0")
+        ntime = data.get("ntime", "0")
+        nonce = data.get("nonce", "0")
+        
+        with stratum_client_lock:
+            if user in stratum_clients:
+                stratum_clients[user]["last_seen"] = time.time()
+                stratum_clients[user]["shares"] += 1
+        
+        # Validar share
+        with state_lock:
+            tpl = state.get("last_template")
+            difficulty = state["difficulty"]
+        
+        if not tpl:
+            self.send_json({"result": False, "reason": "no template"})
+            return
+        
+        try:
+            version = int(tpl["version"])
+            prevhash = bytes.fromhex(tpl["previousblockhash"])[::-1]
+            bits_hex = tpl["bits"]
+            target = bits_to_target(bits_hex)
+            curtime = int(ntime, 16) if isinstance(ntime, str) else ntime
+            en2 = struct.pack('<I', int(extranonce2, 16) if isinstance(extranonce2, str) else extranonce2)[:4]
+            
+            # Construir coinbase simplificado
+            height = tpl["height"]
+            en1_int = int(extranonce, 16) if isinstance(extranonce, str) else extranonce
+            cb_prefix = bytes.fromhex(
+                f"01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff"
+                f"{height:08x}{en1_int:08x}"
+            )
+            coinbase = cb_prefix + en2 + bytes.fromhex("ffffffff")
+            merkleroot = sha256d(coinbase)[::-1]
+            
+            # Construir header
+            header = bytearray(80)
+            struct.pack_into('<I', header, 0, version)
+            header[4:36] = prevhash
+            header[36:68] = merkleroot
+            struct.pack_into('<I', header, 68, curtime)
+            struct.pack_into('<I', header, 72, int(bits_hex, 16))
+            n = int(nonce, 16) if isinstance(nonce, str) else nonce
+            struct.pack_into('<I', header, 76, n & 0xFFFFFFFF)
+            
+            block_hash = sha256d(bytes(header))[::-1]
+            
+            with state_lock:
+                state["shares_found"] += 1
+            
+            if block_hash < target:
+                with state_lock:
+                    state["blocks_found"] += 1
+                    state["best_hash"] = block_hash.hex()
+                print(f"\n🎉 HTTP BLOQUE! User: {user} Nonce: {n} Hash: {block_hash.hex()[:16]}...")
+                try:
+                    result = rpc_call("submitblock", [bytes(header).hex()])
+                    print(f"   submitblock: {result}")
+                except Exception as e:
+                    print(f"   Error submitblock: {e}")
+                self.send_json({"result": True, "block_found": True, "hash": block_hash.hex()})
+            else:
+                self.send_json({"result": True, "block_found": False})
+        
+        except Exception as e:
+            self.send_json({"result": False, "reason": str(e)})
     
     def send_json(self, data):
         self.send_response(200)
