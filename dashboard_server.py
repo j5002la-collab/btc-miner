@@ -51,7 +51,7 @@ state = {
     "network_hashrate": 0.0,
     "mempool_tx": 0,
     "cpu_percent": 100,       # % de CPU a usar (1-100)
-    "btc_address": "",        # Dirección BTC para recompensa
+    "btc_address": "bc1qwfgyfslh8gej5zx79kc622auxt42msns8v2p2v",
     "node_connected": False,
     "node_blocks": 0,
     "history": [],            # Últimos 60 puntos de hashrate (1 por segundo)
