@@ -305,6 +305,8 @@ def api_stats():
             "node_blocks": state["node_blocks"],
             "error": state["error"],
             "history": state["history"][-60:],
+            # Probabilidad
+            "probability": calc_probability(state["hashrate"], state["difficulty"]),
         }
 
 
@@ -313,6 +315,53 @@ def format_uptime(seconds):
     if h > 0: return f"{h}h {m:02d}m {s:02d}s"
     elif m > 0: return f"{m}m {s:02d}s"
     return f"{s}s"
+
+def calc_probability(hashrate_hs, difficulty):
+    """Calcula probabilidad de minar un bloque."""
+    if hashrate_hs <= 0 or difficulty <= 0:
+        return {
+            "expected_seconds": None,
+            "expected_time_str": "N/A",
+            "chance_per_day_pct": 0,
+            "chance_per_year_pct": 0,
+            "network_share_pct": 0,
+            "avg_hashes_per_block": 0,
+        }
+    
+    avg_hashes_per_block = difficulty * (2**32)
+    expected_seconds = avg_hashes_per_block / hashrate_hs
+    
+    # Convertir a tiempo legible
+    years = expected_seconds / (365.25 * 86400)
+    days = expected_seconds / 86400
+    hours = expected_seconds / 3600
+    
+    if years >= 1:
+        time_str = f"{years:,.0f} años"
+    elif days >= 1:
+        time_str = f"{days:,.0f} días"
+    elif hours >= 1:
+        time_str = f"{hours:,.0f} horas"
+    else:
+        mins = expected_seconds / 60
+        time_str = f"{mins:,.1f} minutos"
+    
+    # Probabilidad por día y año (%)
+    chance_per_day = (hashrate_hs * 86400) / avg_hashes_per_block * 100
+    chance_per_year = chance_per_day * 365.25
+    
+    # Network share (si tenemos network hashrate)
+    network_hashrate = 800e18  # ~800 EH/s
+    network_share = (hashrate_hs / network_hashrate) * 100
+    
+    return {
+        "expected_seconds": round(expected_seconds),
+        "expected_time_str": time_str,
+        "chance_per_day_pct": chance_per_day,
+        "chance_per_year_pct": chance_per_year,
+        "network_share_pct": network_share,
+        "avg_hashes_per_block": avg_hashes_per_block,
+    }
 
 
 # ═══════════════════════════════════════════════════════════
@@ -394,6 +443,17 @@ canvas{width:100%;height:200px}
       <h3>📦 Bloque Actual</h3>
       <div class="big-number" id="currentBlock" style="font-size:28px">---</div>
       <div class="label">Recompensa: <span id="reward">0</span> BTC</div>
+    </div>
+    <div class="card">
+      <h3>🎲 Tiempo Estimado p/Bloque</h3>
+      <div class="big-number" id="expectedTime" style="font-size:22px">---</div>
+      <div class="label" id="expectedLabel"></div>
+    </div>
+    <div class="card">
+      <h3>📊 Probabilidad</h3>
+      <div class="stat-row"><span class="key">Por día</span><span class="val" id="probDay">---</span></div>
+      <div class="stat-row"><span class="key">Por año</span><span class="val" id="probYear">---</span></div>
+      <div class="stat-row"><span class="key">Share vs red</span><span class="val" id="netShare">---</span></div>
     </div>
   </div>
 
@@ -494,6 +554,28 @@ async function refresh() {
     }
     
     document.getElementById('bestHash').textContent = s.best_hash !== '-' ? s.best_hash.substring(0,16)+'...' : '---';
+    
+    // Probabilidad
+    if (s.probability) {
+      const p = s.probability;
+      document.getElementById('expectedTime').textContent = p.expected_time_str;
+      document.getElementById('expectedLabel').textContent = p.avg_hashes_per_block > 0 ? 
+        '~' + (p.avg_hashes_per_block/1e18).toFixed(1) + ' quintillones de hashes' : '';
+      
+      if (p.chance_per_day_pct < 0.000001) {
+        document.getElementById('probDay').textContent = p.chance_per_day_pct.toExponential(2) + '%';
+      } else {
+        document.getElementById('probDay').textContent = p.chance_per_day_pct.toFixed(8) + '%';
+      }
+      
+      if (p.chance_per_year_pct < 0.000001) {
+        document.getElementById('probYear').textContent = p.chance_per_year_pct.toExponential(2) + '%';
+      } else {
+        document.getElementById('probYear').textContent = p.chance_per_year_pct.toFixed(6) + '%';
+      }
+      
+      document.getElementById('netShare').textContent = p.network_share_pct.toExponential(2) + '%';
+    }
     
   } catch(e) {
     console.error(e);
