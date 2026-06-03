@@ -621,6 +621,7 @@ def run_server(port=8888):
 
 
 if __name__ == "__main__":
+    PORT = int(os.environ.get("DASHBOARD_PORT", "8888"))
     print(f"""
 ╔══════════════════════════════════════════════════╗
 ║  ⛏️  BTC SOLO MINER v{VERSION} — Dashboard     ║
@@ -635,4 +636,4 @@ if __name__ == "__main__":
     miner.start()
     
     # Iniciar servidor HTTP
-    run_server(8888)
+    run_server(PORT)
