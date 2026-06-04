@@ -1303,14 +1303,14 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
-def run_server(port=8888):
+def run_server(port=9119):
     server = http.server.HTTPServer(("0.0.0.0", port), DashboardHandler)
     print(f"🌐 Dashboard: http://localhost:{port}")
     server.serve_forever()
 
 
 if __name__ == "__main__":
-    PORT = int(os.environ.get("DASHBOARD_PORT", "8888"))
+    PORT = int(os.environ.get("DASHBOARD_PORT", "9119"))
     print(f"""
 ╔══════════════════════════════════════════════════╗
 ║  ⛏️  BTC SOLO MINER v{VERSION} — Dashboard     ║
