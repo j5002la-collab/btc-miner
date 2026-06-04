@@ -36,6 +36,16 @@ RPC_USER = os.environ.get("BTC_RPC_USER", "umbrel")
 RPC_PASS = os.environ.get("BTC_RPC_PASS", "")
 VERSION = "5.0"
 
+# Fallback: leer credenciales de .env local si no están en el entorno
+if not RPC_PASS:
+    _local_env = Path(__file__).parent / ".env"
+    if _local_env.exists():
+        for _line in open(_local_env).read().split("\n"):
+            _line = _line.strip()
+            if _line.startswith("BTC_RPC_PASS="):
+                RPC_PASS = _line.split("=", 1)[1].strip('"').strip("'")
+                break
+
 # ═══════════════════════════════════════════════════════════
 # Estado global compartido (thread-safe)
 # ═══════════════════════════════════════════════════════════
